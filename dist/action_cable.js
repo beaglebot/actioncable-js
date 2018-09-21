@@ -7,17 +7,18 @@
         "welcome": "welcome",
         "ping": "ping",
         "confirmation": "confirm_subscription",
-        "rejection": "reject_subscription"
+        "rejection": "reject_subscription",
+        "authFailed": "auth_failed"
       },
       "default_mount_path": "/cable",
       "protocols": ["actioncable-v1-json", "actioncable-unsupported"]
     },
-    createConsumer: function(url) {
+    createConsumer: function(url, onAuthFailed, onWebSocketError, onConnectionStale) {
       var ref;
       if (url == null) {
         url = (ref = this.getConfig("url")) != null ? ref : this.INTERNAL.default_mount_path;
       }
-      return new ActionCable.Consumer(this.createWebSocketURL(url));
+      return new ActionCable.Consumer(this.createWebSocketURL(url), onAuthFailed, onWebSocketError, onConnectionStale);
     },
     getConfig: function(name) {
       var element;
@@ -138,6 +139,7 @@
 
     ConnectionMonitor.prototype.reconnectIfStale = function() {
       if (this.connectionIsStale()) {
+        this.connection.consumer.onConnectionStale(this.reconnectAttempts, secondsSince(this.disconnectedAt));
         ActionCable.log("ConnectionMonitor detected stale connection. reconnectAttempts = " + this.reconnectAttempts + ", pollInterval = " + (this.getPollInterval()) + " ms, time disconnected = " + (secondsSince(this.disconnectedAt)) + " s, stale threshold = " + this.constructor.staleThreshold + " s");
         this.reconnectAttempts++;
         if (this.disconnectedRecently()) {
@@ -332,6 +334,8 @@
             return this.subscriptions.notify(identifier, "connected");
           case message_types.rejection:
             return this.subscriptions.reject(identifier);
+          case message_types.authFailed:
+            return this.consumer.onAuthFailed();
           default:
             return this.subscriptions.notify(identifier, "received", message);
         }
@@ -357,7 +361,8 @@
           willAttemptReconnect: this.monitor.isRunning()
         });
       },
-      error: function() {
+      error: function(e) {
+        this.consumer.onWebSocketError(e);
         return ActionCable.log("WebSocket onerror event");
       }
     };
@@ -549,10 +554,13 @@
 }).call(this);
 (function() {
   ActionCable.Consumer = (function() {
-    function Consumer(url) {
+    function Consumer(url, onAuthFailed, onWebSocketError, onConnectionStale) {
       this.url = url;
       this.subscriptions = new ActionCable.Subscriptions(this);
       this.connection = new ActionCable.Connection(this);
+      this.onAuthFailed = onAuthFailed;
+      this.onWebSocketError = onWebSocketError;
+      this.onConnectionStale = onConnectionStale;
     }
 
     Consumer.prototype.send = function(data) {
